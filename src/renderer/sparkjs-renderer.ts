@@ -1,20 +1,25 @@
 /**
  * SparkJS World Renderer
  *
- * Abstraction layer for rendering Marble splat/world content in the browser.
- * SparkJS is the recommended web renderer for World Labs assets, built on Three.js.
+ * Renders Marble world assets (SPZ gaussian splat files) in the browser
+ * using SparkJS (https://sparkjs.dev), the recommended web renderer for
+ * World Labs content.
  *
- * This module:
- * - Loads gaussian splat assets from the Marble API
- * - Integrates SparkJS rendering into a Three.js scene
- * - Falls back to a procedural gaussian-splat-inspired world when assets aren't available
+ * SparkJS integration:
+ * - SplatMesh extends THREE.Object3D → loads .spz files directly
+ * - SparkRenderer auto-creates in scene, handles back-to-front sorting
+ * - Supports .spz (World Labs format), .ply, .splat, .sogs, .ksplat
  *
- * SparkJS integration pattern:
- * SparkJS creates its own rendering context that composites with Three.js.
- * The splat world is rendered as a separate layer that the Three.js camera controls.
+ * Fallback:
+ * When SPZ assets aren't available (mock mode), builds a spectacular
+ * procedural world that represents the target visual quality.
+ *
+ * Package: @sparkjsdev/spark (npm)
+ * CDN: https://sparkjs.dev/releases/spark/0.1.10/spark.module.js
  */
 
 import * as THREE from 'three';
+import { SplatMesh } from '@sparkjsdev/spark';
 import type { MarbleWorldAsset } from '../worldlabs/types';
 
 export interface SparkJSConfig {
@@ -27,7 +32,9 @@ export interface SparkJSConfig {
 export class SparkJSWorldRenderer {
   private scene: THREE.Scene;
   private worldGroup: THREE.Group;
+  private splatMesh: SplatMesh | null = null;
   private isLoaded = false;
+  private usesSplat = false;
 
   constructor(private config: SparkJSConfig) {
     this.scene = config.scene;
@@ -38,63 +45,130 @@ export class SparkJSWorldRenderer {
 
   /**
    * Load and render a Marble world asset.
-   * When SparkJS CDN/npm package is available, this would use:
-   *   import { SparkRenderer } from '@worldlabs/sparkjs';
-   *   const spark = new SparkRenderer({ canvas, camera });
-   *   await spark.loadSplat(asset.url);
    *
-   * For now, builds a spectacular procedural world that represents
-   * what the Marble-generated world would look like.
+   * Real path: Dynamically imports @sparkjsdev/spark, creates a SplatMesh
+   * pointed at the SPZ URL, adds it to the Three.js scene.
+   *
+   * Fallback path: Builds a procedural world with Three.js geometries
+   * and splat-inspired particles.
    */
   async loadWorld(
     asset: MarbleWorldAsset,
     onProgress?: (progress: number) => void
   ): Promise<void> {
-    if (asset.url !== '__mock__') {
-      // Real SparkJS integration path
+    if (!asset.isMock) {
       try {
-        await this.loadSparkJSWorld(asset, onProgress);
+        await this.loadSparkJSSplatWorld(asset, onProgress);
+        this.usesSplat = true;
+        this.isLoaded = true;
         return;
       } catch (e) {
-        console.warn('SparkJS load failed, using procedural fallback:', e);
+        console.warn('SparkJS splat load failed, using procedural fallback:', e);
       }
     }
 
-    // Procedural world that showcases what a Marble world would look like
-    await this.buildProceduralWorld(asset, onProgress);
+    // Procedural fallback world
+    await this.buildProceduralWorld(onProgress);
     this.isLoaded = true;
   }
 
   /**
-   * Real SparkJS integration (for when the package is available)
-   * SparkJS renders gaussian splats using WebGL2 compute shaders
-   * and composites with the Three.js scene.
+   * Real SparkJS integration path.
+   *
+   * SplatMesh extends SplatGenerator extends THREE.Object3D, so it works
+   * like any Three.js object in the scene graph.
+   *
+   * SparkRenderer is automatically created when the first SplatMesh is
+   * added to a scene. It manages GPU-based gaussian splat sorting.
+   *
+   * Supported formats: .spz (World Labs), .ply, .splat, .sogs, .ksplat
    */
-  private async loadSparkJSWorld(
+  private async loadSparkJSSplatWorld(
     asset: MarbleWorldAsset,
     onProgress?: (progress: number) => void
   ): Promise<void> {
-    // SparkJS integration point:
-    // const { SparkRenderer } = await import('@worldlabs/sparkjs');
-    // const sparkRenderer = new SparkRenderer({
-    //   canvas: this.config.canvas,
-    //   camera: this.config.camera,
-    //   renderer: this.config.renderer,
-    // });
-    // await sparkRenderer.loadSplat(asset.url, {
-    //   onProgress: (p) => onProgress?.(p),
-    //   quality: 'high',
-    //   sortMode: 'gpu',
-    // });
-    // this.sparkInstance = sparkRenderer;
+    onProgress?.(0.1);
+
+    // Ensure SparkJS static initialization is complete
+    await SplatMesh.staticInitialize();
+
+    onProgress?.(0.2);
+
+    // Create SplatMesh with the SPZ URL from Marble API
+    // SplatMesh will fetch the SPZ file, decode gaussian splats,
+    // and render them using the SparkRenderer's sort pipeline.
+    const splat = new SplatMesh({
+      url: asset.spzUrl,
+      onLoad: async () => {
+        onProgress?.(0.7);
+        console.log('[SparkJS] Splat world loaded:', {
+          boundingBox: splat.getBoundingBox(),
+        });
+      },
+    });
+
+    // Wait for the splat to finish loading
+    await splat.initialized;
+
+    // SplatMesh extends Object3D — position/rotate like any Three.js object
+    splat.position.set(0, 0, 0);
+
+    this.splatMesh = splat;
+    this.scene.add(splat);
+
+    onProgress?.(0.8);
+
+    // Optionally load collider mesh for physics/interaction
+    if (asset.colliderUrl) {
+      await this.loadColliderMesh(asset.colliderUrl);
+    }
+
+    // Add gameplay overlay elements (beacons need Three.js meshes on top of splat world)
+    this.addWorldOverlays();
 
     onProgress?.(1.0);
-    throw new Error('SparkJS package not yet available - using procedural world');
   }
 
-  /** Build a spectacular procedural world inspired by the prompt */
+  /** Load the GLB collider mesh for approximate collision detection */
+  private async loadColliderMesh(url: string): Promise<void> {
+    try {
+      const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+      const loader = new GLTFLoader();
+      const gltf = await loader.loadAsync(url);
+      const collider = gltf.scene;
+      collider.name = 'collider-mesh';
+      collider.visible = false; // Invisible — used only for raycasting
+      this.worldGroup.add(collider);
+    } catch (e) {
+      console.warn('Failed to load collider mesh:', e);
+    }
+  }
+
+  /** Add Three.js overlay elements that complement the splat world */
+  private addWorldOverlays(): void {
+    // Environmental particles floating above the splat world
+    this.buildSplatParticles();
+
+    // Subtle fog layers
+    for (let layer = 0; layer < 3; layer++) {
+      const y = -5 + layer * 10;
+      const fogGeo = new THREE.PlaneGeometry(200, 200);
+      const fogMat = new THREE.MeshBasicMaterial({
+        color: 0x0a1428,
+        transparent: true,
+        opacity: 0.02,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      });
+      const fog = new THREE.Mesh(fogGeo, fogMat);
+      fog.rotation.x = -Math.PI / 2;
+      fog.position.y = y;
+      this.worldGroup.add(fog);
+    }
+  }
+
+  /** Build the procedural fallback world */
   private async buildProceduralWorld(
-    asset: MarbleWorldAsset,
     onProgress?: (progress: number) => void
   ): Promise<void> {
     onProgress?.(0.1);
@@ -122,19 +196,16 @@ export class SparkJSWorldRenderer {
   }
 
   private buildTerrain(): void {
-    // Main canyon floor
     const floorGeo = new THREE.PlaneGeometry(400, 400, 128, 128);
     const positions = floorGeo.attributes.position;
     for (let i = 0; i < positions.count; i++) {
       const x = positions.getX(i);
       const z = positions.getY(i);
-      // Canyon-shaped terrain with valleys
       let y = 0;
       y += Math.sin(x * 0.015) * 8;
       y += Math.cos(z * 0.02) * 6;
       y += Math.sin(x * 0.05 + z * 0.03) * 3;
       y += (Math.random() - 0.5) * 1.5;
-      // Central valley
       const distFromCenter = Math.sqrt(x * x + z * z);
       y -= Math.max(0, 20 - distFromCenter * 0.15);
       positions.setZ(i, y);
@@ -152,7 +223,6 @@ export class SparkJSWorldRenderer {
     floor.receiveShadow = true;
     this.worldGroup.add(floor);
 
-    // Water/crystal floor in the deep valley
     const waterGeo = new THREE.PlaneGeometry(120, 120);
     const waterMat = new THREE.MeshStandardMaterial({
       color: 0x0a2a5a,
@@ -177,7 +247,6 @@ export class SparkJSWorldRenderer {
       flatShading: true,
     });
 
-    // Create canyon walls using displaced boxes
     for (let i = 0; i < 60; i++) {
       const angle = (i / 60) * Math.PI * 2;
       const radius = 80 + Math.sin(angle * 3) * 30 + Math.random() * 20;
@@ -186,7 +255,6 @@ export class SparkJSWorldRenderer {
       const depth = 8 + Math.random() * 15;
 
       const geo = new THREE.BoxGeometry(width, height, depth, 2, 4, 2);
-      // Displace vertices for organic look
       const pos = geo.attributes.position;
       for (let j = 0; j < pos.count; j++) {
         pos.setX(j, pos.getX(j) + (Math.random() - 0.5) * 3);
@@ -205,7 +273,6 @@ export class SparkJSWorldRenderer {
       this.worldGroup.add(wall);
     }
 
-    // Internal canyon pillars
     for (let i = 0; i < 20; i++) {
       const angle = Math.random() * Math.PI * 2;
       const radius = 20 + Math.random() * 50;
@@ -237,14 +304,12 @@ export class SparkJSWorldRenderer {
       emissiveIntensity: 0.1,
     });
 
-    // Central monument base
     const monumentGeo = new THREE.CylinderGeometry(8, 10, 25, 8);
     const monument = new THREE.Mesh(monumentGeo, ruinMat.clone());
     monument.position.set(0, 12.5, 0);
     monument.name = 'central-monument';
     this.worldGroup.add(monument);
 
-    // Monument top ring
     const ringGeo = new THREE.TorusGeometry(6, 0.8, 8, 16);
     const ringMat = new THREE.MeshStandardMaterial({
       color: 0x3a3a6a,
@@ -259,14 +324,13 @@ export class SparkJSWorldRenderer {
     ring.name = 'monument-ring';
     this.worldGroup.add(ring);
 
-    // Scattered ruin blocks
     const ruinPositions = [
       [-25, 0, -30], [30, 0, -20], [-15, 0, 35],
       [40, 0, 25], [-35, 0, 10], [20, 0, -40],
       [-40, 0, -15], [10, 0, 45], [45, 0, -10],
     ];
 
-    for (const [rx, _ry, rz] of ruinPositions) {
+    for (const [rx, , rz] of ruinPositions) {
       const blockCount = 2 + Math.floor(Math.random() * 4);
       for (let j = 0; j < blockCount; j++) {
         const w = 2 + Math.random() * 5;
@@ -289,7 +353,6 @@ export class SparkJSWorldRenderer {
       }
     }
 
-    // Archways
     for (let i = 0; i < 6; i++) {
       const angle = (i / 6) * Math.PI * 2 + 0.3;
       const radius = 35 + Math.random() * 15;
@@ -311,18 +374,15 @@ export class SparkJSWorldRenderer {
     });
 
     const spacing = 4;
-    // Left pillar
     const lGeo = new THREE.BoxGeometry(1.5, height, 1.5);
     const left = new THREE.Mesh(lGeo, mat);
     left.position.set(x - Math.cos(rotation) * spacing, y + height / 2, z - Math.sin(rotation) * spacing);
     this.worldGroup.add(left);
 
-    // Right pillar
     const right = new THREE.Mesh(lGeo.clone(), mat.clone());
     right.position.set(x + Math.cos(rotation) * spacing, y + height / 2, z + Math.sin(rotation) * spacing);
     this.worldGroup.add(right);
 
-    // Top lintel
     const tGeo = new THREE.BoxGeometry(spacing * 2 + 2, 1.2, 1.8);
     const top = new THREE.Mesh(tGeo, mat.clone());
     top.position.set(x, y + height, z);
@@ -339,7 +399,6 @@ export class SparkJSWorldRenderer {
       emissiveIntensity: 0.15,
     });
 
-    // Floating stone slabs creating walkways
     const pathPoints: [number, number, number][] = [];
     for (let i = 0; i < 40; i++) {
       const t = i / 40;
@@ -364,7 +423,6 @@ export class SparkJSWorldRenderer {
       this.worldGroup.add(slab);
     }
 
-    // Large floating platforms
     const platforms = [
       { pos: [0, 30, 0], size: 12 },
       { pos: [-50, 20, -30], size: 8 },
@@ -384,7 +442,6 @@ export class SparkJSWorldRenderer {
   }
 
   private buildBioluminescence(): void {
-    // Glowing crystals/fungi scattered around
     const glowColors = [0x00ffaa, 0x00aaff, 0x8844ff, 0x00ff88, 0x4488ff];
 
     for (let i = 0; i < 150; i++) {
@@ -414,7 +471,6 @@ export class SparkJSWorldRenderer {
       crystal.rotation.z = (Math.random() - 0.5) * 0.4;
       this.worldGroup.add(crystal);
 
-      // Add point light for some crystals
       if (Math.random() < 0.15) {
         const light = new THREE.PointLight(color, 2, 15);
         light.position.copy(crystal.position);
@@ -423,7 +479,6 @@ export class SparkJSWorldRenderer {
       }
     }
 
-    // Glowing veins on the ground
     for (let i = 0; i < 80; i++) {
       const angle = Math.random() * Math.PI * 2;
       const radius = 10 + Math.random() * 70;
@@ -451,7 +506,6 @@ export class SparkJSWorldRenderer {
   }
 
   private buildAtmosphere(): void {
-    // Volumetric fog planes at various heights
     for (let layer = 0; layer < 5; layer++) {
       const y = -5 + layer * 8;
       const fogGeo = new THREE.PlaneGeometry(300, 300);
@@ -468,7 +522,6 @@ export class SparkJSWorldRenderer {
       this.worldGroup.add(fog);
     }
 
-    // Distant mountains/canyon backdrop
     for (let i = 0; i < 30; i++) {
       const angle = (i / 30) * Math.PI * 2;
       const radius = 150 + Math.random() * 50;
@@ -492,8 +545,6 @@ export class SparkJSWorldRenderer {
   }
 
   private buildSplatParticles(): void {
-    // Gaussian-splat-inspired particle system
-    // Simulates the visual character of splat rendering with floating luminous points
     const count = 8000;
     const positions = new Float32Array(count * 3);
     const colors = new Float32Array(count * 3);
@@ -546,7 +597,7 @@ export class SparkJSWorldRenderer {
     this.worldGroup.add(particles);
   }
 
-  /** Update splat particles and animated elements */
+  /** Update animated elements each frame */
   update(time: number): void {
     if (!this.isLoaded) return;
 
@@ -562,23 +613,24 @@ export class SparkJSWorldRenderer {
       particles.rotation.y = time * 0.01;
     }
 
-    // Animate monument ring
-    const ring = this.worldGroup.getObjectByName('monument-ring') as THREE.Mesh | undefined;
-    if (ring) {
-      ring.rotation.z = time * 0.2;
-      const mat = ring.material as THREE.MeshStandardMaterial;
-      mat.emissiveIntensity = 0.2 + Math.sin(time) * 0.1;
+    // Animate monument ring (procedural world only)
+    if (!this.usesSplat) {
+      const ring = this.worldGroup.getObjectByName('monument-ring') as THREE.Mesh | undefined;
+      if (ring) {
+        ring.rotation.z = time * 0.2;
+        const mat = ring.material as THREE.MeshStandardMaterial;
+        mat.emissiveIntensity = 0.2 + Math.sin(time) * 0.1;
+      }
     }
   }
 
-  /** Get the world group for collision/interaction queries */
   getWorldGroup(): THREE.Group {
     return this.worldGroup;
   }
 
   /** Trigger visual transformation on the world (for final beacon activation) */
   triggerWorldTransformation(intensity: number): void {
-    // Brighten emissive materials
+    // Brighten emissive materials in the procedural world
     this.worldGroup.traverse((obj) => {
       if (obj instanceof THREE.Mesh && obj.material instanceof THREE.MeshStandardMaterial) {
         if (obj.material.emissiveIntensity > 0) {
@@ -586,6 +638,11 @@ export class SparkJSWorldRenderer {
         }
       }
     });
+
+    // If using real SplatMesh, adjust recolor and opacity for visual transformation
+    if (this.splatMesh) {
+      this.splatMesh.recolor = new THREE.Color(1.3, 1.1, 1.4);
+    }
 
     // Add transformation lights
     const colors = [0x00ffaa, 0x00aaff, 0xff8844];
@@ -603,6 +660,13 @@ export class SparkJSWorldRenderer {
   }
 
   dispose(): void {
+    // Dispose SplatMesh if present
+    if (this.splatMesh) {
+      this.scene.remove(this.splatMesh);
+      this.splatMesh.dispose();
+      this.splatMesh = null;
+    }
+
     this.worldGroup.traverse((obj) => {
       if (obj instanceof THREE.Mesh) {
         obj.geometry.dispose();

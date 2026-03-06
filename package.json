@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@sparkjsdev/spark": "^0.1.10",
     "three": "^0.170.0"
   },
   "devDependencies": {

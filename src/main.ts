@@ -62,7 +62,7 @@ class MarbleExpedition {
     const apiKey = this.getConfigValue('WORLDLABS_API_KEY');
     this.worldLabsClient = new WorldLabsClient({
       apiKey,
-      baseUrl: this.getConfigValue('WORLDLABS_API_URL') || 'https://api.worldlabs.ai/v1',
+      baseUrl: this.getConfigValue('WORLDLABS_API_URL') || 'https://api.worldlabs.ai/marble/v1',
     });
 
     if (!this.worldLabsClient.configured) {
@@ -117,19 +117,19 @@ class MarbleExpedition {
       const worldPrompt = 'Bioluminescent canyon with giant ruins and floating pathways, ' +
         'ancient alien civilization, glowing crystals, mysterious fog, dramatic vista';
 
-      const worldResponse = mode === 'generate'
+      const worldAsset = mode === 'generate'
         ? await this.worldLabsClient.generateWorld(
-          { prompt: worldPrompt, style: 'fantasy', resolution: 'high' },
+          {
+            prompt: worldPrompt,
+            model: 'marble-0.1-mini', // Use mini for fast iteration, switch to plus for quality
+            displayName: 'Marble Expedition World',
+          },
           (progress, status) => this.screens.updateLoading(progress * 0.5, status)
         )
         : await this.worldLabsClient.loadWorld(
           'default-world',
           (progress, status) => this.screens.updateLoading(progress * 0.5, status)
         );
-
-      if (!worldResponse.assets?.length) {
-        throw new Error('No world assets returned');
-      }
 
       this.screens.updateLoading(0.5, 'Initializing renderer...');
 
@@ -141,7 +141,8 @@ class MarbleExpedition {
       this.renderer = ctx.renderer;
 
       // Phase 3: Load world via SparkJS renderer
-      this.screens.updateLoading(0.55, 'Loading world into SparkJS...');
+      // SparkJS SplatMesh loads SPZ files directly into Three.js scene
+      this.screens.updateLoading(0.55, 'Loading SPZ splats into SparkJS...');
       this.worldRenderer = new SparkJSWorldRenderer({
         canvas,
         scene: this.scene,
@@ -150,8 +151,8 @@ class MarbleExpedition {
       });
 
       await this.worldRenderer.loadWorld(
-        worldResponse.assets[0],
-        (p) => this.screens.updateLoading(0.55 + p * 0.3, 'Rendering world...')
+        worldAsset,
+        (p) => this.screens.updateLoading(0.55 + p * 0.3, 'Rendering gaussian splats...')
       );
 
       this.screens.updateLoading(0.85, 'Placing beacons...');

@@ -25,8 +25,8 @@ to new realms.
 
 | Layer | Role |
 |-------|------|
-| **World Labs API Client** (`src/worldlabs/`) | Generates or loads Marble worlds via the World Labs API. Handles authentication, progress polling, and error fallback. When no API key is configured, produces a convincing mock generation flow. |
-| **SparkJS Renderer** (`src/renderer/`) | Renders Marble gaussian-splat world assets in the browser. SparkJS is the recommended web renderer for World Labs content. Falls back to a procedural world built with Three.js geometries and splat-inspired particles when SparkJS assets aren't available. |
+| **World Labs API Client** (`src/worldlabs/`) | Generates or loads Marble worlds via the World API (`POST /worlds:generate`). Uses `WLT-Api-Key` header auth. Polls `GET /operations/{id}` until done, then fetches world assets including SPZ splat URLs, collider mesh (GLB), and panorama. Falls back to a convincing mock generation flow when no API key is configured. Supports both `marble-0.1-plus` (quality) and `marble-0.1-mini` (speed) models. |
+| **SparkJS Renderer** (`src/renderer/`) | Renders Marble SPZ gaussian-splat assets in the browser using `@sparkjsdev/spark` (`SplatMesh`). SplatMesh extends `THREE.Object3D` — loads `.spz` files directly and integrates into the Three.js scene graph. SparkRenderer handles GPU-based splat sorting automatically. Falls back to a procedural world with splat-inspired particles when no real SPZ assets are available. |
 | **Three.js Scene** (`src/game/scene-setup.ts`) | Creates the rendering context, lighting, sky, fog, and post-processing. Controls the WebGL renderer and camera. |
 | **Game Systems** (`src/game/`) | Player controller (WASD + mouse look), beacon/objective system, portal effects, world transformation events. |
 | **UI / HUD** (`src/ui/`) | Title screen, loading screen with progress, in-game HUD (objectives, compass, beacon count, interact prompts, notifications), and completion screen. |
@@ -60,12 +60,17 @@ Open `http://localhost:3000` in your browser.
 
 To use the real Marble API for world generation:
 
-1. Copy `.env.example` to `.env`
-2. Add your World Labs API key:
+1. Get an API key at https://platform.worldlabs.ai
+2. Copy `.env.example` to `.env`
+3. Add your World Labs API key:
    ```
    VITE_WORLDLABS_API_KEY=your_api_key_here
    ```
-3. Restart the dev server
+4. Restart the dev server
+
+The API uses `WLT-Api-Key` header authentication. Pricing: $1 = 1,250 credits
+(minimum purchase $5). The prototype defaults to `marble-0.1-mini` (fast, ~30-45s)
+but can be switched to `marble-0.1-plus` (quality, ~5 min) in `src/main.ts`.
 
 Without an API key, the prototype uses a procedural world fallback that
 simulates what a Marble-generated world looks and feels like.
@@ -120,16 +125,16 @@ that wander the world to create a social atmosphere.
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Marble API world generation | **Mocked** | Simulated progress flow with realistic stages. Real API integration ready — just add key. |
-| SparkJS rendering | **Fallback** | Uses procedural Three.js world with splat-inspired particles. SparkJS integration code stubbed with clear extension point. |
+| Marble API world generation | **Mock fallback** | Full API client implemented with real endpoints (`/worlds:generate`, `/operations/{id}`, `/worlds/{id}`). Simulated progress flow when no API key configured. Add key to use live generation. |
+| SparkJS rendering | **Integrated + fallback** | `@sparkjsdev/spark` SplatMesh is imported and used when real SPZ assets are available. Procedural Three.js world with splat-inspired particles used when running without Marble API. |
 | Multiplayer | **Ghost mode** | Simulated remote players. WebSocket transport class included but uses mock. Server spec documented. |
 | Collision detection | **Approximate** | Ground plane + bounds clamping. No mesh-level collision. |
 | Sound / Music | **Not included** | Would add Web Audio API ambient layers + beacon activation SFX. |
 
 ## Next Steps
 
-1. **Integrate real Marble API** — Plug in API key, test with live world generation
-2. **Integrate SparkJS** — Import `@worldlabs/sparkjs` when available, load real splat assets
+1. **Add Marble API key** — Set `VITE_WORLDLABS_API_KEY` to generate real worlds
+2. **Test with live SPZ assets** — SplatMesh integration is ready; real SPZ URLs from API will render automatically
 3. **Deploy multiplayer server** — WebSocket room server per `server-spec.ts`
 4. **Add audio** — Ambient soundscape, beacon activation sounds, music transitions
 5. **Multiple worlds** — Generate from different prompts, portal between them
@@ -141,8 +146,8 @@ that wander the world to create a social atmosphere.
 - **Vite** — Build tool and dev server
 - **TypeScript** — Type-safe application code
 - **Three.js** — 3D rendering, camera, player controls, effects
-- **World Labs Marble API** — AI world generation (modular client layer)
-- **SparkJS** — Gaussian splat web renderer (integration layer ready)
+- **World Labs Marble API** — AI world generation (real API client with `WLT-Api-Key` auth)
+- **@sparkjsdev/spark** (SparkJS) — GPU-accelerated gaussian splat renderer for Three.js (SplatMesh loads .spz files)
 
 ## Project Structure
 
@@ -151,9 +156,9 @@ src/
 ├── main.ts                    # Entry point, orchestrates all systems
 ├── worldlabs/
 │   ├── client.ts              # Marble API client with mock fallback
-│   └── types.ts               # API type definitions
+│   └── types.ts               # API type definitions (Marble v1 schema)
 ├── renderer/
-│   └── sparkjs-renderer.ts    # SparkJS wrapper + procedural world
+│   └── sparkjs-renderer.ts    # SplatMesh integration + procedural fallback
 ├── game/
 │   ├── scene-setup.ts         # Three.js scene, lighting, sky
 │   ├── player-controller.ts   # WASD + mouse look controller
