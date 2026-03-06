@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Marble Expedition</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+    canvas { display: block; }
+    @font-face {
+      font-family: 'ExpeditionUI';
+      src: local('Inter'), local('Segoe UI'), local('Helvetica Neue'), local('Arial');
+    }
+    #app {
+      width: 100vw;
+      height: 100vh;
+      position: relative;
+      font-family: 'ExpeditionUI', 'Inter', 'Segoe UI', system-ui, sans-serif;
+      color: #e0e8f0;
+      user-select: none;
+    }
+    #render-canvas {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      z-index: 0;
+    }
+
+    /* Title Screen */
+    #title-screen {
+      position: absolute; inset: 0; z-index: 100;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      background: radial-gradient(ellipse at 50% 40%, #0a1628 0%, #000 100%);
+      transition: opacity 1.2s ease;
+    }
+    #title-screen.hidden { opacity: 0; pointer-events: none; }
+    #title-screen h1 {
+      font-size: 4.5rem; font-weight: 200; letter-spacing: 0.4em;
+      text-transform: uppercase; color: #c8daf0;
+      text-shadow: 0 0 60px rgba(100,180,255,0.3), 0 0 120px rgba(100,180,255,0.1);
+      margin-bottom: 0.5rem;
+      animation: titlePulse 4s ease-in-out infinite;
+    }
+    #title-screen .subtitle {
+      font-size: 0.9rem; letter-spacing: 0.3em; text-transform: uppercase;
+      color: rgba(160,200,240,0.5); margin-bottom: 3rem;
+    }
+    #title-screen .powered-by {
+      font-size: 0.65rem; letter-spacing: 0.2em; text-transform: uppercase;
+      color: rgba(120,160,200,0.35); margin-bottom: 2rem;
+    }
+    .title-btn {
+      background: rgba(80,160,255,0.08); border: 1px solid rgba(80,160,255,0.25);
+      color: #a0c8f0; padding: 14px 48px; font-size: 0.85rem;
+      letter-spacing: 0.25em; text-transform: uppercase; cursor: pointer;
+      transition: all 0.4s ease; margin: 6px 0; min-width: 280px;
+      font-family: inherit;
+    }
+    .title-btn:hover {
+      background: rgba(80,160,255,0.15); border-color: rgba(80,160,255,0.5);
+      color: #d0e8ff; box-shadow: 0 0 30px rgba(80,160,255,0.15);
+    }
+    .title-btn:active { transform: scale(0.97); }
+    @keyframes titlePulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.85; }
+    }
+
+    /* Loading Screen */
+    #loading-screen {
+      position: absolute; inset: 0; z-index: 90;
+      display: none; flex-direction: column; align-items: center; justify-content: center;
+      background: radial-gradient(ellipse at 50% 60%, #060d1a 0%, #000 100%);
+    }
+    #loading-screen.active { display: flex; }
+    #loading-screen.hidden { opacity: 0; pointer-events: none; transition: opacity 1s ease; }
+    .loading-title {
+      font-size: 1.1rem; letter-spacing: 0.3em; text-transform: uppercase;
+      color: rgba(160,200,240,0.6); margin-bottom: 2rem;
+    }
+    .loading-bar-container {
+      width: 320px; height: 2px; background: rgba(80,160,255,0.1);
+      position: relative; overflow: hidden;
+    }
+    .loading-bar {
+      height: 100%; width: 0%; background: linear-gradient(90deg, rgba(80,160,255,0.3), rgba(80,160,255,0.8));
+      transition: width 0.5s ease; box-shadow: 0 0 20px rgba(80,160,255,0.4);
+    }
+    .loading-status {
+      font-size: 0.65rem; letter-spacing: 0.15em; color: rgba(160,200,240,0.35);
+      margin-top: 1.5rem; min-height: 1.2em;
+    }
+
+    /* HUD */
+    #hud {
+      position: absolute; inset: 0; z-index: 10; pointer-events: none;
+      display: none;
+    }
+    #hud.active { display: block; }
+    .hud-objectives {
+      position: absolute; top: 24px; left: 28px;
+    }
+    .hud-objectives .label {
+      font-size: 0.55rem; letter-spacing: 0.25em; text-transform: uppercase;
+      color: rgba(160,200,240,0.4); margin-bottom: 8px;
+    }
+    .hud-objectives .objective {
+      font-size: 0.75rem; color: rgba(180,210,240,0.7);
+      margin-bottom: 4px; display: flex; align-items: center; gap: 8px;
+    }
+    .hud-objectives .objective .dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: rgba(80,160,255,0.3); border: 1px solid rgba(80,160,255,0.5);
+      transition: all 0.5s ease;
+    }
+    .hud-objectives .objective.completed .dot {
+      background: rgba(80,255,180,0.6); border-color: rgba(80,255,180,0.8);
+      box-shadow: 0 0 10px rgba(80,255,180,0.3);
+    }
+    .hud-objectives .objective.completed { color: rgba(80,255,180,0.6); }
+
+    .hud-beacon-count {
+      position: absolute; top: 24px; right: 28px;
+      text-align: right;
+    }
+    .hud-beacon-count .count {
+      font-size: 2rem; font-weight: 200; color: rgba(160,200,240,0.6);
+      line-height: 1;
+    }
+    .hud-beacon-count .label {
+      font-size: 0.5rem; letter-spacing: 0.2em; text-transform: uppercase;
+      color: rgba(160,200,240,0.3);
+    }
+
+    .hud-compass {
+      position: absolute; bottom: 28px; left: 50%; transform: translateX(-50%);
+      display: flex; gap: 4px; align-items: center;
+    }
+    .hud-compass .dir {
+      font-size: 0.55rem; letter-spacing: 0.1em; color: rgba(160,200,240,0.25);
+      padding: 2px 6px;
+    }
+    .hud-compass .dir.active { color: rgba(160,200,240,0.7); }
+
+    .hud-interact {
+      position: absolute; bottom: 50%; left: 50%; transform: translate(-50%, 60px);
+      font-size: 0.75rem; letter-spacing: 0.15em; color: rgba(80,200,255,0.8);
+      background: rgba(0,0,0,0.4); padding: 8px 20px;
+      border: 1px solid rgba(80,200,255,0.3);
+      display: none; text-align: center;
+      animation: interactPulse 2s ease-in-out infinite;
+    }
+    .hud-interact.visible { display: block; }
+    @keyframes interactPulse {
+      0%, 100% { border-color: rgba(80,200,255,0.3); }
+      50% { border-color: rgba(80,200,255,0.6); }
+    }
+
+    .hud-notification {
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -80px);
+      font-size: 1rem; letter-spacing: 0.3em; text-transform: uppercase;
+      color: rgba(80,255,200,0.8); text-align: center;
+      text-shadow: 0 0 40px rgba(80,255,200,0.3);
+      opacity: 0; transition: opacity 0.5s ease;
+      pointer-events: none;
+    }
+    .hud-notification.visible { opacity: 1; }
+
+    .hud-crosshair {
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      width: 2px; height: 2px; background: rgba(200,220,240,0.4);
+      box-shadow: 0 0 4px rgba(200,220,240,0.2);
+      border-radius: 50%;
+    }
+
+    .hud-mode {
+      position: absolute; bottom: 24px; right: 28px;
+      font-size: 0.5rem; letter-spacing: 0.2em; text-transform: uppercase;
+      color: rgba(160,200,240,0.25);
+    }
+
+    .hud-players {
+      position: absolute; bottom: 24px; left: 28px;
+      font-size: 0.5rem; letter-spacing: 0.15em;
+      color: rgba(160,200,240,0.25);
+    }
+
+    /* Completion Screen */
+    #completion-screen {
+      position: absolute; inset: 0; z-index: 80;
+      display: none; flex-direction: column; align-items: center; justify-content: center;
+      background: rgba(0,0,0,0.6);
+      backdrop-filter: blur(8px);
+    }
+    #completion-screen.active { display: flex; }
+    #completion-screen h2 {
+      font-size: 2.5rem; font-weight: 200; letter-spacing: 0.4em;
+      text-transform: uppercase; color: rgba(80,255,200,0.9);
+      text-shadow: 0 0 60px rgba(80,255,200,0.3);
+      margin-bottom: 1rem;
+    }
+    #completion-screen .sub {
+      font-size: 0.8rem; letter-spacing: 0.2em; color: rgba(160,200,240,0.5);
+      margin-bottom: 2rem; text-align: center; max-width: 400px; line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <canvas id="render-canvas"></canvas>
+
+    <!-- Title Screen -->
+    <div id="title-screen">
+      <h1>Marble Expedition</h1>
+      <div class="subtitle">World Exploration Prototype</div>
+      <div class="powered-by">Powered by World Labs Marble API + SparkJS + Three.js</div>
+      <button class="title-btn" id="btn-enter-world">Enter World</button>
+      <button class="title-btn" id="btn-generate-world">Generate New World</button>
+    </div>
+
+    <!-- Loading Screen -->
+    <div id="loading-screen">
+      <div class="loading-title">Generating World</div>
+      <div class="loading-bar-container">
+        <div class="loading-bar" id="loading-bar"></div>
+      </div>
+      <div class="loading-status" id="loading-status">Initializing Marble API...</div>
+    </div>
+
+    <!-- HUD -->
+    <div id="hud">
+      <div class="hud-crosshair"></div>
+      <div class="hud-objectives">
+        <div class="label">Expedition Objectives</div>
+        <div id="objective-list"></div>
+      </div>
+      <div class="hud-beacon-count">
+        <div class="count" id="beacon-count">0/5</div>
+        <div class="label">Beacons Activated</div>
+      </div>
+      <div class="hud-compass" id="compass"></div>
+      <div class="hud-interact" id="interact-prompt">Press [E] to Activate</div>
+      <div class="hud-notification" id="notification"></div>
+      <div class="hud-mode" id="mode-label">Explore Mode</div>
+      <div class="hud-players" id="players-label"></div>
+    </div>
+
+    <!-- Completion Screen -->
+    <div id="completion-screen">
+      <h2>Expedition Complete</h2>
+      <div class="sub">All ancient beacons have been activated. The world awakens. A portal to new realms stands open before you.</div>
+      <button class="title-btn" id="btn-restart">Begin New Expedition</button>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
